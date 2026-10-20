@@ -28,6 +28,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     var playlists by mutableStateOf(store.playlists); private set
     var folders by mutableStateOf(store.folders); private set
     var apiKey by mutableStateOf(store.apiKey); private set
+    var fontIndex by mutableIntStateOf(store.fontIndex); private set
     var scanning by mutableStateOf(false); private set
     var aiLoading by mutableStateOf(false); private set
     var aiResult by mutableStateOf<List<AiPlaylist>>(emptyList()); private set
@@ -60,6 +61,13 @@ class AppVM(app: Application) : AndroidViewModel(app) {
             controller = c
         }, ContextCompat.getMainExecutor(app))
     }
+
+    init {
+        // Canciones guardadas por una version anterior no tienen carpeta: se reescanean.
+        if (folders.isNotEmpty() && songs.any { it.folder.isEmpty() }) rescan()
+    }
+
+    fun setFont(i: Int) { fontIndex = i; store.fontIndex = i }
 
     // ---- Reproduccion ----
     private fun item(s: Song) = MediaItem.Builder().setMediaId(s.uri).setUri(s.uri)
