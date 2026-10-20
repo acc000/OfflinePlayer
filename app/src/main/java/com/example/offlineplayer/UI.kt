@@ -12,7 +12,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,7 +31,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -44,16 +49,25 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {}.launch(Manifest.permission.POST_NOTIFICATIONS)
-        setContent { AppTheme { App() } }
+        setContent {
+            val vm: AppVM = viewModel()
+            AppTheme(fontFactors[vm.fontIndex]) { App(vm) }
+        }
     }
 }
 
 // Material You: los colores salen del fondo de pantalla del movil (Android 12+).
+val fontLabels = listOf("Muy peque\u00f1a", "Peque\u00f1a", "Normal", "Grande")
+val fontFactors = listOf(0.8f, 0.9f, 1f, 1.15f)
+
 @Composable
-fun AppTheme(content: @Composable () -> Unit) {
+fun AppTheme(fontFactor: Float, content: @Composable () -> Unit) {
     val ctx = LocalContext.current
+    val d = LocalDensity.current
     val scheme = if (isSystemInDarkTheme()) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-    MaterialTheme(colorScheme = scheme, content = content)
+    CompositionLocalProvider(LocalDensity provides Density(d.density, d.fontScale * fontFactor)) {
+        MaterialTheme(colorScheme = scheme, content = content)
+    }
 }
 
 private val tabs = listOf(
@@ -102,42 +116,77 @@ fun App(vm: AppVM = viewModel()) {
     }
 }
 
+fun folderName(f: String): String =
+    Uri.decode(f).substringAfterLast(':').substringAfterLast('/').ifBlank { "Carpeta" }
+
 @Composable
 fun LibraryScreen(vm: AppVM) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let { vm.addFolder(it) } }
     var query by remember { mutableStateOf("") }
-    val list = remember(vm.songs, query) {
-        if (query.isBlank()) vm.songs else vm.songs.filter { (it.title + it.artist + it.album).contains(query, true) }
-    }
+    var byFolder by remember { mutableStateOf(false) }
+    var openFolder by remember { mutableStateOf<String?>(null) }
     var menuSong by remember { mutableStateOf<Song?>(null) }
+    BackHandler(enabled = openFolder != null) { openFolder = null }
+
+    val base = openFolder?.let { f -> vm.songs.filter { it.folder == f } } ?: vm.songs
+    val list = remember(base, query) {
+        if (query.isBlank()) base else base.filter { (it.title + it.artist + it.album).contains(query, true) }
+    }
+    val showFolders = byFolder && openFolder == null
 
     Column(Modifier.fillMaxSize()) {
-        Text("Biblioteca", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(16.dp))
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (openFolder != null) IconButton({ openFolder = null }) { Icon(Icons.Default.ArrowBack, "Volver") }
+            Text(openFolder?.let { folderName(it) } ?: "Biblioteca", style = MaterialTheme.typography.headlineLarge, maxLines = 1)
+        }
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { launcher.launch(null) }) {
                 Icon(Icons.Default.CreateNewFolder, null); Spacer(Modifier.width(8.dp)); Text("A\u00f1adir carpeta")
             }
-            FilledTonalButton(enabled = list.isNotEmpty(), onClick = { vm.playShuffled(list) }) {
+            FilledTonalButton(enabled = list.isNotEmpty() && !showFolders, onClick = { vm.playShuffled(list) }) {
                 Icon(Icons.Default.Shuffle, null); Spacer(Modifier.width(8.dp)); Text("Aleatorio")
             }
         }
-        OutlinedTextField(
-            value = query, onValueChange = { query = it }, singleLine = true,
-            placeholder = { Text("Buscar canci\u00f3n, artista, \u00e1lbum") },
-            modifier = Modifier.fillMaxWidth().padding(16.dp)
-        )
-        if (vm.scanning) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (vm.songs.isEmpty() && !vm.scanning) {
-            Box(Modifier.fillMaxSize().padding(32.dp), Alignment.Center) { Text("A\u00f1ade una carpeta del m\u00f3vil para empezar.") }
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !byFolder, onClick = { byFolder = false; openFolder = null }, label = { Text("Todas") })
+            FilterChip(selected = byFolder, onClick = { byFolder = true }, label = { Text("Carpetas") })
         }
-        LazyColumn {
-            itemsIndexed(list, key = { _, s -> s.uri }) { i, s ->
-                ListItem(
-                    headlineContent = { Text(s.title, maxLines = 1) },
-                    supportingContent = { Text("${s.artist} \u00b7 ${s.album}", maxLines = 1) },
-                    trailingContent = { IconButton({ menuSong = s }) { Icon(Icons.Default.PlaylistAdd, "A\u00f1adir a lista") } },
-                    modifier = Modifier.clickable { vm.play(list, i) }
-                )
+        if (vm.scanning) LinearProgressIndicator(Modifier.fillMaxWidth())
+
+        if (showFolders) {
+            if (vm.folders.isEmpty()) {
+                Box(Modifier.fillMaxSize().padding(32.dp), Alignment.Center) { Text("A\u00fan no has importado carpetas.") }
+            }
+            LazyColumn {
+                items(vm.folders.toList(), key = { it }) { f ->
+                    val n = vm.songs.count { it.folder == f }
+                    ListItem(
+                        headlineContent = { Text(folderName(f), maxLines = 1) },
+                        supportingContent = { Text("$n canciones") },
+                        leadingContent = { Icon(Icons.Default.Folder, null) },
+                        trailingContent = { IconButton({ vm.removeFolder(f) }) { Icon(Icons.Default.Delete, "Quitar carpeta") } },
+                        modifier = Modifier.clickable { openFolder = f; query = "" }
+                    )
+                }
+            }
+        } else {
+            OutlinedTextField(
+                value = query, onValueChange = { query = it }, singleLine = true,
+                placeholder = { Text("Buscar canci\u00f3n, artista, \u00e1lbum") },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            if (vm.songs.isEmpty() && !vm.scanning) {
+                Box(Modifier.fillMaxSize().padding(32.dp), Alignment.Center) { Text("A\u00f1ade una carpeta del m\u00f3vil para empezar.") }
+            }
+            LazyColumn {
+                itemsIndexed(list, key = { _, s -> s.uri }) { i, s ->
+                    ListItem(
+                        headlineContent = { Text(s.title, maxLines = 1) },
+                        supportingContent = { Text("${s.artist} \u00b7 ${s.album}", maxLines = 1) },
+                        trailingContent = { IconButton({ menuSong = s }) { Icon(Icons.Default.PlaylistAdd, "A\u00f1adir a lista") } },
+                        modifier = Modifier.clickable { vm.play(list, i) }
+                    )
+                }
             }
         }
     }
@@ -264,10 +313,18 @@ fun SettingsScreen(vm: AppVM) {
     var key by remember { mutableStateOf(vm.apiKey) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Text("Ajustes", style = MaterialTheme.typography.headlineLarge) }
+        item { Text("Tama\u00f1o de fuente", style = MaterialTheme.typography.titleMedium) }
+        itemsIndexed(fontLabels) { i, label ->
+            Row(Modifier.fillMaxWidth().clickable { vm.setFont(i) }, verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = vm.fontIndex == i, onClick = { vm.setFont(i) })
+                Text(label)
+            }
+        }
+        item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
         item { Text("Carpetas de m\u00fasica", style = MaterialTheme.typography.titleMedium) }
         items(vm.folders.toList()) { f ->
             ListItem(
-                headlineContent = { Text(Uri.decode(f).substringAfterLast(':'), maxLines = 1) },
+                headlineContent = { Text(folderName(f), maxLines = 1) },
                 trailingContent = { IconButton({ vm.removeFolder(f) }) { Icon(Icons.Default.Delete, "Quitar carpeta") } }
             )
         }
@@ -285,15 +342,33 @@ fun SettingsScreen(vm: AppVM) {
 @Composable
 fun MiniPlayer(vm: AppVM, onOpen: () -> Unit) {
     val md = vm.current?.mediaMetadata
-    Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.MusicNote, null)
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(md?.title?.toString() ?: "", maxLines = 1, fontWeight = FontWeight.Bold)
-                Text(md?.artist?.toString() ?: "", maxLines = 1, style = MaterialTheme.typography.bodySmall)
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.fillMaxWidth()
+            .pointerInput(Unit) {
+                var total = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { total = 0f },
+                    onDragCancel = { total = 0f },
+                    onDragEnd = { if (total < -50f) onOpen() }
+                ) { _, d -> total += d }
             }
-            IconButton({ vm.togglePlay() }) { Icon(if (vm.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Reproducir/Pausar") }
-            IconButton({ vm.next() }) { Icon(Icons.Default.SkipNext, "Siguiente") }
+            .clickable(onClick = onOpen)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                Modifier.padding(top = 6.dp).width(32.dp).height(4.dp).clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.4f))
+            )
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.MusicNote, null)
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(md?.title?.toString() ?: "", maxLines = 1, fontWeight = FontWeight.Bold)
+                    Text(md?.artist?.toString() ?: "", maxLines = 1, style = MaterialTheme.typography.bodySmall)
+                }
+                IconButton({ vm.togglePlay() }) { Icon(if (vm.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Reproducir/Pausar") }
+                IconButton({ vm.next() }) { Icon(Icons.Default.SkipNext, "Siguiente") }
+            }
         }
     }
 }
