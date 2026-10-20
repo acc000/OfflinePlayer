@@ -47,6 +47,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
         override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) { shuffle = shuffleModeEnabled }
         override fun onRepeatModeChanged(repeatMode: Int) { repeat = repeatMode }
+        override fun onPlayerError(error: androidx.media3.common.PlaybackException) { message = "Error al reproducir: ${error.errorCodeName}" }
     }
 
     init {
@@ -65,7 +66,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         .setMediaMetadata(MediaMetadata.Builder().setTitle(s.title).setArtist(s.artist).setAlbumTitle(s.album).build()).build()
 
     fun play(list: List<Song>, index: Int = 0) {
-        val c = controller ?: return
+        val c = controller ?: run { message = "El reproductor a\u00fan no est\u00e1 listo, int\u00e9ntalo de nuevo"; return }
         c.setMediaItems(list.map { item(it) }, index, 0L); c.prepare(); c.play()
     }
     fun playShuffled(list: List<Song>) {
