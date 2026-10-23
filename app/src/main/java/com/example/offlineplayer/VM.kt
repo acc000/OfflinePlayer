@@ -27,11 +27,10 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     var songs by mutableStateOf(store.songs); private set
     var playlists by mutableStateOf(store.playlists); private set
     var folders by mutableStateOf(store.folders); private set
-    var apiKey by mutableStateOf(store.apiKey); private set
     var fontIndex by mutableIntStateOf(store.fontIndex); private set
     var scanning by mutableStateOf(false); private set
-    var aiLoading by mutableStateOf(false); private set
-    var aiResult by mutableStateOf<List<AiPlaylist>>(emptyList()); private set
+    var recs by mutableStateOf<List<DeezerRec>>(emptyList()); private set
+    var recsLoading by mutableStateOf(false); private set
     var message by mutableStateOf<String?>(null)
 
     var controller by mutableStateOf<MediaController?>(null); private set
@@ -128,16 +127,15 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     fun removeFromPlaylist(name: String, uri: String) =
         savePl(playlists.map { if (it.name == name) it.copy(uris = it.uris - uri) else it })
 
-    // ---- IA ----
-    fun saveKey(k: String) { apiKey = k.trim(); store.apiKey = apiKey; message = "Clave guardada" }
-    fun recommend() {
-        if (apiKey.isBlank()) { message = "A\u00f1ade tu clave de API en Ajustes"; return }
-        if (songs.isEmpty()) { message = "Primero a\u00f1ade una carpeta con m\u00fasica"; return }
-        aiLoading = true
+    // ---- Recomendaciones (Deezer) ----
+    fun loadRecs() {
+        if (recsLoading) return
+        if (songs.none { it.artist != "Desconocido" }) { message = "Tus canciones no tienen artista en las etiquetas"; return }
+        recsLoading = true
         viewModelScope.launch {
-            try { aiResult = withContext(Dispatchers.IO) { Ai.recommend(apiKey, songs, plays) } }
-            catch (e: Exception) { message = "Error IA: ${e.message}" }
-            aiLoading = false
+            try { recs = withContext(Dispatchers.IO) { Deezer.recommend(songs, plays) } }
+            catch (e: Exception) { message = "No se pudo conectar con Deezer. Revisa tu conexi\u00f3n." }
+            recsLoading = false
         }
     }
 }
