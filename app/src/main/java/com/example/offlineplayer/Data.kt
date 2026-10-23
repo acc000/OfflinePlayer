@@ -11,7 +11,6 @@ import java.net.URL
 
 data class Song(val uri: String, val title: String, val artist: String, val album: String, val genre: String, val durationMs: Long, val folder: String = "")
 data class Playlist(val name: String, val uris: List<String>)
-data class AiPlaylist(val name: String, val reason: String, val uris: List<String>)
 
 class Store(ctx: Context) {
     private val sp = ctx.getSharedPreferences("store", Context.MODE_PRIVATE)
@@ -23,6 +22,18 @@ class Store(ctx: Context) {
     var apiKey: String
         get() = sp.getString("key", "")!!
         set(v) { sp.edit().putString("key", v).apply() }
+
+    var eqEnabled: Boolean
+        get() = sp.getBoolean("eqOn", false)
+        set(v) { sp.edit().putBoolean("eqOn", v).apply() }
+
+    var eqPreset: Int
+        get() = sp.getInt("eqPreset", -1)
+        set(v) { sp.edit().putInt("eqPreset", v).apply() }
+
+    var eqLevels: List<Int>
+        get() = sp.getString("eqLv", "")!!.split(",").mapNotNull { it.toIntOrNull() }
+        set(v) { sp.edit().putString("eqLv", v.joinToString(",")).apply() }
 
     var fontIndex: Int
         get() = sp.getInt("font", 2)
@@ -103,37 +114,5 @@ object MusicScanner {
         } finally {
             r.release()
         }
-    }
-}
-
-object Ai {
-    const val MODEL = "claude-sonnet-5-5"
-
-    // Solo se envian metadatos (titulo, artista, genero, reproducciones). Nunca los archivos.
-    fun recommend(key: String, songs: List<Song>, plays: Map<String, Int>): List<AiPlaylist> {
-        val list = (songs.sortedByDescending { plays[it.uri] ?: 0 }.take(60) + songs.shuffled().take(140))
-            .distinctBy { it.uri }.take(200)
-        val lines = list.mapIndexed { i, s -> "$i|${s.title}|${s.artist}|${s.genre}|${plays[s.uri] ?: 0}" }.joinToString("\n")
-        val prompt = "Eres un curador musical. Esta es la biblioteca del usuario en formato id|titulo|artista|genero|reproducciones:\n$lines\n\n" +
-            "Crea de 4 a 6 listas de reproduccion tematicas (estado de animo, genero, energia, momento del dia...) usando solo los ids dados. " +
-            "Responde UNICAMENTE con JSON: {\"playlists\":[{\"name\":\"...\",\"reason\":\"frase corta en espanol\",\"ids\":[0,1]}]}"
-        val body = JSONObject().put("model", MODEL).put("max_tokens", 2000)
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", prompt)))
-        val c = URL("https://api.anthropic.com/v1/messages").openConnection() as HttpURLConnection
-        c.requestMethod = "POST"; c.connectTimeout = 15000; c.readTimeout = 60000; c.doOutput = true
-        c.setRequestProperty("x-api-key", key)
-        c.setRequestProperty("anthropic-version", "2023-06-01")
-        c.setRequestProperty("content-type", "application/json")
-        c.outputStream.use { it.write(body.toString().toByteArray()) }
-        val code = c.responseCode
-        val txt = (if (code in 200..299) c.inputStream else c.errorStream).bufferedReader().readText()
-        if (code !in 200..299) error("HTTP $code: ${txt.take(160)}")
-        val text = JSONObject(txt).getJSONArray("content").getJSONObject(0).getString("text")
-        val arr = JSONObject(text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1)).getJSONArray("playlists")
-        return List(arr.length()) { i ->
-            val p = arr.getJSONObject(i)
-            val ids = p.getJSONArray("ids")
-            AiPlaylist(p.getString("name"), p.optString("reason"), (0 until ids.length()).mapNotNull { list.getOrNull(ids.getInt(it))?.uri })
-        }.filter { it.uris.isNotEmpty() }
     }
 }
