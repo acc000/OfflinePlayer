@@ -3,6 +3,7 @@ package com.example.offlineplayer
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -20,6 +21,10 @@ class PlayerService : MediaSessionService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+        Eq.attach(this, player.audioSessionId)
+        player.addListener(object : Player.Listener {
+            override fun onAudioSessionIdChanged(audioSessionId: Int) { Eq.attach(this@PlayerService, audioSessionId) }
+        })
         session = MediaSession.Builder(this, player)
             .setCallback(object : MediaSession.Callback {
                 // El mediaId de cada cancion es su URI: se restaura aqui para que el servicio pueda abrirla.
@@ -38,6 +43,7 @@ class PlayerService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onDestroy() {
+        Eq.release()
         session?.run { player.release(); release() }
         session = null
         super.onDestroy()
