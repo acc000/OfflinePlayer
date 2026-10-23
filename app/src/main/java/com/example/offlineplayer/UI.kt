@@ -18,6 +18,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -281,26 +282,27 @@ fun PlaylistDetail(vm: AppVM, p: Playlist, onBack: () -> Unit) {
 
 @Composable
 fun ForYouScreen(vm: AppVM) {
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Para ti", style = MaterialTheme.typography.headlineLarge)
-        Text("La IA crea listas a partir de los t\u00edtulos, artistas y g\u00e9neros de tu biblioteca. Tus archivos nunca se env\u00edan.", style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(12.dp))
-        Button(enabled = !vm.aiLoading, onClick = { vm.recommend() }) {
-            Icon(Icons.Default.AutoAwesome, null); Spacer(Modifier.width(8.dp)); Text("Generar recomendaciones")
+    LaunchedEffect(Unit) { if (vm.recs.isEmpty()) vm.loadRecs() }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Text("Para ti", style = MaterialTheme.typography.headlineLarge)
+            Text("Artistas y canciones parecidos a los de tu m\u00fasica, seg\u00fan Deezer (necesita internet). Son ideas para descubrir: no se reproducen en la app.", style = MaterialTheme.typography.bodyMedium)
         }
-        if (vm.aiLoading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 12.dp))
-        LazyColumn(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(vm.aiResult, key = { it.name }) { r ->
-                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(r.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text(r.reason, style = MaterialTheme.typography.bodyMedium)
-                        Text("${r.uris.size} canciones", style = MaterialTheme.typography.labelMedium)
+        item {
+            FilledTonalButton(enabled = !vm.recsLoading, onClick = { vm.loadRecs() }) {
+                Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(8.dp)); Text("Buscar nuevas")
+            }
+        }
+        if (vm.recsLoading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if (vm.recs.isEmpty() && !vm.recsLoading) item { Text("A\u00fan no hay sugerencias.") }
+        items(vm.recs, key = { it.artist }) { r ->
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(r.artist, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Parecido a ${r.because}", style = MaterialTheme.typography.bodyMedium)
+                    if (r.tracks.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { vm.playUris(r.uris) }) { Text("Reproducir") }
-                            OutlinedButton(onClick = { vm.createPlaylist(r.name, r.uris); vm.message = "Lista guardada" }) { Text("Guardar lista") }
-                        }
+                        r.tracks.forEach { Text("\u266a $it", style = MaterialTheme.typography.bodyMedium) }
                     }
                 }
             }
@@ -310,7 +312,6 @@ fun ForYouScreen(vm: AppVM) {
 
 @Composable
 fun SettingsScreen(vm: AppVM) {
-    var key by remember { mutableStateOf(vm.apiKey) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Text("Ajustes", style = MaterialTheme.typography.headlineLarge) }
         item { Text("Tama\u00f1o de fuente", style = MaterialTheme.typography.titleMedium) }
@@ -321,6 +322,38 @@ fun SettingsScreen(vm: AppVM) {
             }
         }
         item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
+        item { Text("Ecualizador", style = MaterialTheme.typography.titleMedium) }
+        if (!Eq.available) {
+            item { Text("No disponible todav\u00eda: reproduce una canci\u00f3n primero.") }
+        } else {
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Activar ecualizador", Modifier.weight(1f))
+                    Switch(checked = Eq.active, onCheckedChange = { Eq.turn(it) })
+                }
+            }
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(Eq.presets.indices.toList()) { i ->
+                        FilterChip(selected = Eq.presetIndex == i, onClick = { Eq.usePreset(i) }, label = { Text(Eq.presets[i]) })
+                    }
+                }
+            }
+            items(Eq.freqs.indices.toList()) { i ->
+                val f = Eq.freqs[i]
+                val l = Eq.levels.getOrElse(i) { 0 }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (f >= 1000) "%.1f kHz".format(f / 1000f) else "$f Hz", Modifier.width(72.dp), style = MaterialTheme.typography.labelMedium)
+                    Slider(
+                        value = l.toFloat(), onValueChange = { Eq.setBand(i, it.toInt()) },
+                        valueRange = Eq.minLevel.toFloat()..Eq.maxLevel.toFloat(), enabled = Eq.active, modifier = Modifier.weight(1f)
+                    )
+                    Text("%+.1f dB".format(l / 100f), Modifier.width(64.dp), style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            item { OutlinedButton(onClick = { Eq.resetFlat() }) { Text("Restablecer") } }
+        }
+        item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
         item { Text("Carpetas de m\u00fasica", style = MaterialTheme.typography.titleMedium) }
         items(vm.folders.toList()) { f ->
             ListItem(
@@ -329,13 +362,6 @@ fun SettingsScreen(vm: AppVM) {
             )
         }
         item { OutlinedButton(onClick = { vm.rescan() }, enabled = !vm.scanning) { Text("Volver a escanear") } }
-        item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
-        item { Text("Clave de API de Anthropic (recomendaciones IA)", style = MaterialTheme.typography.titleMedium) }
-        item {
-            OutlinedTextField(key, { key = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(), label = { Text("sk-ant-...") })
-        }
-        item { Button(onClick = { vm.saveKey(key) }) { Text("Guardar clave") } }
     }
 }
 
